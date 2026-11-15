@@ -30,11 +30,15 @@ iptables rule and everything is back to stock.
 
 Logged in over SSH to the Savant audio server with the `RPM` account:
 
-```sh
-# radios only
-wget -qO- https://raw.githubusercontent.com/fl0zan0/savant_audio_proxy/main/install.sh | sh
+**Radios only:**
 
-# radios + Music Assistant (the script asks for the address, player and token)
+```sh
+wget -qO- https://raw.githubusercontent.com/fl0zan0/savant_audio_proxy/main/install.sh | sh
+```
+
+**Radios + Music Assistant** (the script asks for the address, player and token):
+
+```sh
 wget -qO- https://raw.githubusercontent.com/fl0zan0/savant_audio_proxy/main/install.sh | sh -s -- --with-ma
 ```
 
