@@ -1,7 +1,7 @@
 # savant-audio-proxy
 
 Adds music sources to the Savant app, **without modifying any Savant software**, on a Savant
-audio server (Savant Media Server **PAV-SMS2001**):
+audio server (Tested with **PAV-SMS2001**):
 
 - **Radios**: your own stations (M3U playlist), played by the Savant audio server's built-in
   player, with Savant favorites and live title, artist and cover art (from the streams' ICY
