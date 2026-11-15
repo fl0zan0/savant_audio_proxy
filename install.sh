@@ -33,6 +33,7 @@ UNIT=$NAME
 OLD_UNITS="savant-radios musicgo-proxy"   # former names, removed on install
 OLD_DIR=/data/RPM/savant-radios          # settings imported when there is no config yet
 PORT=14028
+TAB=$(printf '\t')
 
 say()  { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
@@ -138,6 +139,16 @@ ask() {
     read -r rep < /dev/tty || rep=""
     [ -n "$rep" ] && echo "$rep" || echo "$2"
 }
+# no_space NAME VALUE HINT: values written unquoted into the service command line
+no_space() {
+    case $2 in
+        *" "*|*"$TAB"*) fail "$1 must not contain spaces (\"$2\").${3:+
+$3}" ;;
+    esac
+}
+PLAYER_HINT="MA_PLAYER is the player_id, not the player name: in Music Assistant open
+Settings > Players > this Savant audio server's AirPlay player; the id ends the page URL
+(e.g. .../settings/editplayer/up0123abcd). Fix it in $CONF or with MA_PLAYER=... --with-ma."
 
 # --- options applied to config.env -----------------------------------------------------------
 [ -n "$OPT_STATIONS" ] && set_conf STATIONS "$OPT_STATIONS"
@@ -148,8 +159,10 @@ if [ "$WITH_MA" = yes ]; then
     say "Music Assistant"
     MA_ADDR=${MA_ADDR:-}; MA_PLAYER=${MA_PLAYER:-}
     [ -n "$MA_ADDR" ] || MA_ADDR=$(ask "Music Assistant address (e.g. 192.168.1.10:8095)" "")
-    [ -n "$MA_PLAYER" ] || MA_PLAYER=$(ask "player_id of this Savant audio server's AirPlay player in MA" "")
+    [ -n "$MA_PLAYER" ] || MA_PLAYER=$(ask "player_id (not the name) of this Savant audio server's AirPlay player in MA, e.g. up0123abcd" "")
     [ -n "$MA_ADDR" ] && [ -n "$MA_PLAYER" ] || fail "Music Assistant address and player are required."
+    no_space MA_ADDR "$MA_ADDR"
+    no_space MA_PLAYER "$MA_PLAYER" "$PLAYER_HINT"
     if [ -n "${MA_TOKEN:-}" ]; then
         printf '%s\n' "$MA_TOKEN" > "$DEST_DIR/ma_token"
     elif [ ! -s "$DEST_DIR/ma_token" ]; then
@@ -177,6 +190,13 @@ MA_PLAYER=${MA_PLAYER:-}
 LOG_MAX_MB=${LOG_MAX_MB:-50}
 
 # --- command line ----------------------------------------------------------------------
+no_space STATIONS "$STATIONS"
+no_space COVER_URL "$COVER_URL"
+no_space RADIOS_ICON "${RADIOS_ICON:-}"
+no_space MA_ADDR "$MA_ADDR"
+no_space MA_PLAYER "$MA_PLAYER" "$PLAYER_HINT"
+no_space MA_ICON "${MA_ICON:-}"
+case $RADIOS_TITLE in *\"*) fail "RADIOS_TITLE must not contain double quotes." ;; esac
 ARGS="--listen 0.0.0.0:$PORT --upstream 127.0.0.1:4028 --log $DEST_DIR/frames.jsonl --log-max-mb $LOG_MAX_MB"
 ARGS_TITLE=""
 if [ -n "$STATIONS" ]; then

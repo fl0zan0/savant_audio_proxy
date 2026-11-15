@@ -103,8 +103,10 @@ A station without ICY metadata is shown with its name and logo.
 You need:
 - the Music Assistant address (`192.168.1.10:8095`);
 - a **long-lived token**, created in the Music Assistant UI;
-- the **player_id** of this Savant audio server's AirPlay player in Music Assistant (visible in
-  the player page URL, or via the `players/all` API).
+- the **player_id** of this Savant audio server's AirPlay player in Music Assistant. This is
+  the id, not the player's name: open **Settings → Players**, click the player, and take the
+  end of the page URL (e.g. `…/settings/editplayer/up0123abcd` → `up0123abcd`). The installer
+  rejects a value containing spaces.
 
 The Savant app then shows a "Music Assistant" tile. Playback goes over AirPlay 2 to the Savant
 audio server.
