@@ -1,0 +1,18 @@
+#EXTM3U
+# Example: the Radio Paradise channels (https://radioparadise.com), MP3 192 kb/s.
+# Replace them with your own stations. Each entry:
+#   #EXTINF:-1 tvg-logo="logo URL",Display name
+#   stream URL
+# AAC 320 kb/s variants: aac-320, mellow-320, rock-320, global-320, serenity.
+
+#EXTINF:-1 tvg-logo="https://radioparadise.com/apple-touch-icon.png",Radio Paradise – Main Mix
+https://stream.radioparadise.com/mp3-192
+
+#EXTINF:-1 tvg-logo="https://radioparadise.com/apple-touch-icon.png",Radio Paradise – Mellow Mix
+https://stream.radioparadise.com/mellow-192
+
+#EXTINF:-1 tvg-logo="https://radioparadise.com/apple-touch-icon.png",Radio Paradise – Rock Mix
+https://stream.radioparadise.com/rock-192
+
+#EXTINF:-1 tvg-logo="https://radioparadise.com/apple-touch-icon.png",Radio Paradise – Global Mix
+https://stream.radioparadise.com/global-192

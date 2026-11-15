@@ -1,0 +1,24 @@
+# Publishes a Release for every vX.Y.Z tag:  git tag v1.0.0 && git push origin v1.0.0
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build
+        run: sh scripts/build.sh "$GITHUB_REF_NAME"
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/savant-audio-proxy-armv7.tar.gz --title "$GITHUB_REF_NAME" --generate-notes
