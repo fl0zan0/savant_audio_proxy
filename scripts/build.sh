@@ -25,8 +25,8 @@ mkdir -p "$OUT/$PKG"
 CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "$OUT/$PKG/$NAME" .
 
-cp install.sh uninstall.sh config.env.example stations.m3u README.md LICENSE "$OUT/$PKG/"
-chmod 755 "$OUT/$PKG/$NAME" "$OUT/$PKG/install.sh" "$OUT/$PKG/uninstall.sh"
+cp install.sh update.sh uninstall.sh config.env.example stations.m3u README.md LICENSE "$OUT/$PKG/"
+chmod 755 "$OUT/$PKG/$NAME" "$OUT/$PKG/install.sh" "$OUT/$PKG/update.sh" "$OUT/$PKG/uninstall.sh"
 
 echo "==> Archive"
 TARFLAGS=""

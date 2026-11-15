@@ -8,11 +8,18 @@
 # From an extracted archive (no Internet on the Savant audio server):
 #   sh install.sh [options]
 #
+# Once installed, in /data/RPM/savant-audio-proxy:
+#   ./update.sh        update to the latest release (same as ./install.sh --update)
+#   ./install.sh       re-apply config.env (regenerates the service, no download)
+#
 # Options:
 #   --with-ma          enable Music Assistant (asks for address, player and token)
 #   --without-ma       disable Music Assistant
 #   --stations SOURCE  station list: M3U file or http(s) URL
 #   --version vX.Y.Z   install this version instead of the latest
+#   --update           download the latest release even when run from an installed folder;
+#                      does nothing if that version is already installed
+#   --force            with --update: reinstall even if already up to date
 #   --help             show this help
 #
 # Environment variables (unattended install):
@@ -40,6 +47,8 @@ fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- options ---------------------------------------------------------------------------
 WITH_MA=""        # "", yes, no
+UPDATE=""
+FORCE=""
 OPT_STATIONS=""
 VERSION=latest
 expect=""
@@ -55,20 +64,25 @@ for a in "$@"; do
     case $a in
         --with-ma)    WITH_MA=yes ;;
         --without-ma) WITH_MA=no ;;
+        --update)     UPDATE=yes ;;
+        --force)      FORCE=yes ;;
         --stations)   expect=stations ;;
         --version)    expect=version ;;
-        --help|-h)    sed -n '2,25p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "see https://github.com/$REPO"; exit 0 ;;
+        --help|-h)    sed -n '2,/^$/p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//' || echo "see https://github.com/$REPO"; exit 0 ;;
         *) fail "unknown option: $a (see --help)" ;;
     esac
 done
 [ -z "$expect" ] || fail "missing value after --$expect"
 
-# --- run through "wget | sh": download the archive, then run its install.sh -----------------
+# --- run through "wget | sh" or --update: download the archive, then run its install.sh -----
 SELF_DIR=""
 case $0 in
     *install.sh) SELF_DIR=$(cd "$(dirname "$0")" && pwd) ;;
 esac
-if [ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/$NAME" ]; then
+DOWNLOAD=""
+[ -z "$SELF_DIR" ] || [ ! -f "$SELF_DIR/$NAME" ] && DOWNLOAD=yes
+[ "$UPDATE" = yes ] && [ -z "${SAP_EXTRACTED:-}" ] && DOWNLOAD=yes
+if [ -n "$DOWNLOAD" ]; then
     if [ "$VERSION" = latest ]; then
         URL="https://github.com/$REPO/releases/latest/download/$ASSET"
     else
@@ -87,7 +101,17 @@ has no HTTPS: download $ASSET on a computer, copy it with scp, then
         fail "neither curl nor wget on this Savant audio server."
     fi
     tar -xzf "$TMP/$ASSET" -C "$TMP" || fail "unreadable archive."
-    sh "$TMP/$NAME-armv7/install.sh" "$@"
+    if [ "$UPDATE" = yes ]; then
+        cur=$("$DEST_DIR/$NAME" -version 2>/dev/null || echo none)
+        new=$("$TMP/$NAME-armv7/$NAME" -version 2>/dev/null || echo "?")
+        echo "   installed: $cur   available: $new"
+        if [ "$cur" = "$new" ] && [ -z "$FORCE" ]; then
+            echo ""
+            echo "Already up to date (use --force to reinstall)."
+            exit 0
+        fi
+    fi
+    SAP_EXTRACTED=1 sh "$TMP/$NAME-armv7/install.sh" "$@"
     exit $?
 fi
 SRC_DIR=$SELF_DIR
@@ -112,13 +136,16 @@ fi
 if [ "$SRC_DIR" != "$DEST_DIR" ]; then
     cp -f "$SRC_DIR/$NAME" "$DEST_DIR/$NAME.new"
     mv -f "$DEST_DIR/$NAME.new" "$DEST_DIR/$NAME"
-    for f in install.sh uninstall.sh config.env.example README.md LICENSE; do
+    for f in install.sh update.sh uninstall.sh config.env.example README.md LICENSE; do
         [ -f "$SRC_DIR/$f" ] && cp -f "$SRC_DIR/$f" "$DEST_DIR/$f"
     done
     [ -f "$DEST_DIR/stations.m3u" ] || cp "$SRC_DIR/stations.m3u" "$DEST_DIR/stations.m3u"
 fi
 [ -f "$DEST_DIR/config.env" ] || cp "$DEST_DIR/config.env.example" "$DEST_DIR/config.env"
 chmod 755 "$DEST_DIR/$NAME"
+for f in install.sh update.sh uninstall.sh; do
+    [ -f "$DEST_DIR/$f" ] && chmod 755 "$DEST_DIR/$f"
+done
 "$DEST_DIR/$NAME" -version >/dev/null 2>&1 || fail "the program does not run on this Savant audio server."
 
 CONF=$DEST_DIR/config.env
@@ -295,6 +322,7 @@ else
 fi
 echo "   settings: $CONF"
 echo "   log: $DEST_DIR/frames.jsonl"
-echo "   uninstall: sh $DEST_DIR/uninstall.sh"
+echo "   update: $DEST_DIR/update.sh"
+echo "   uninstall: $DEST_DIR/uninstall.sh"
 echo ""
 echo "Installation complete."

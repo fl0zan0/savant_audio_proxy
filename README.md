@@ -53,8 +53,16 @@ restarts `music-go`. Music stops for a few seconds.
 | `--stations SOURCE` | station list: M3U file or http(s) URL |
 | `--version vX.Y.Z` | installs a specific version |
 
-**Update**: run the same command again. `config.env`, `stations.m3u` and `ma_token` are kept;
-only the program is replaced.
+**Update** to the latest release (`config.env`, `stations.m3u` and `ma_token` are kept; nothing
+happens if you already run the latest version):
+
+```sh
+/data/RPM/savant-audio-proxy/update.sh
+```
+
+`update.sh` comes with v1.0.2: to update from v1.0.0 or v1.0.1, run the install command above
+once. To re-apply a change made to `config.env` without downloading anything, run
+`/data/RPM/savant-audio-proxy/install.sh`.
 
 **No HTTPS on the Savant audio server?** Download `savant-audio-proxy-armv7.tar.gz` from the
 [Releases](https://github.com/fl0zan0/savant_audio_proxy/releases) on a computer, then:
