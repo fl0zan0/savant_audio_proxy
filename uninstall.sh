@@ -15,6 +15,9 @@ echo "==> Stopping the $UNIT service (also removes the port 4028 redirect)"
 sudo systemctl stop "$UNIT" 2>/dev/null || true
 sudo systemctl disable "$UNIT" 2>/dev/null || true
 sudo systemctl daemon-reload
+if command -v crontab >/dev/null 2>&1 && crontab -l 2>/dev/null | grep -q "$DEST_DIR/boot.sh"; then
+    crontab -l 2>/dev/null | grep -v "$DEST_DIR/boot.sh" | crontab - || true
+fi
 
 echo "==> Restarting music-go (the Savant host reconnects to it directly)"
 sudo systemctl restart music-go

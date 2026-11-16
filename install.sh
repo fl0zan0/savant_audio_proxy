@@ -280,7 +280,9 @@ RULE="-p tcp --dport 4028 -j REDIRECT --to-ports $PORT"
     echo "RestartSec=2"
     echo ""
     echo "[Install]"
-    echo "WantedBy=multi-user.target"
+    # Same targets as music-go. Not multi-user.target: music-go is ordered after pulseaudio,
+    # itself after multi-user.target, so After=music-go there is an ordering cycle at boot.
+    echo "WantedBy=savant-audio.target savant-host-audio.target"
 } > "$DEST_DIR/$UNIT.service"
 
 for old in $OLD_UNITS; do
@@ -302,6 +304,29 @@ systemctl is-active --quiet "$UNIT" || {
     systemctl --no-pager status "$UNIT" | tail -15
     fail "the $UNIT service does not start (see above)."
 }
+
+# --- start at boot ---------------------------------------------------------------------
+# The unit is a link into /data, which is mounted after systemd loads its units: at boot
+# the service is "not found" and does not start. RPM's crontab runs boot.sh at reboot to
+# reload systemd once /data is there, start the service and make the host reconnect.
+cat > "$DEST_DIR/boot.sh" <<EOF
+#!/bin/sh
+# Run at boot by the RPM crontab (@reboot), installed by install.sh.
+sleep 15
+systemctl is-active --quiet $UNIT && exit 0
+sudo -n /bin/systemctl daemon-reload
+sudo -n /bin/systemctl start $UNIT
+sleep 2
+systemctl is-active --quiet $UNIT && sudo -n /bin/systemctl restart music-go
+EOF
+chmod +x "$DEST_DIR/boot.sh"
+if command -v crontab >/dev/null 2>&1; then
+    { crontab -l 2>/dev/null | grep -v "$DEST_DIR/boot.sh" || true
+      echo "@reboot sh $DEST_DIR/boot.sh >/dev/null 2>&1"; } | crontab - \
+        || echo "   warning: could not add the @reboot crontab entry; after a reboot run: sh $DEST_DIR/boot.sh"
+else
+    echo "   warning: no crontab here; after a reboot run: sh $DEST_DIR/boot.sh"
+fi
 
 # --- host reconnection -----------------------------------------------------------------
 say "Restarting music-go (music stops for a few seconds)"

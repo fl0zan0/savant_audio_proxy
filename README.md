@@ -44,7 +44,8 @@ wget -qO- https://raw.githubusercontent.com/fl0zan0/savant_audio_proxy/main/inst
 
 The script downloads the latest published version (GitHub Releases), installs everything in
 `/data/RPM/savant-audio-proxy`, creates the `savant-audio-proxy` service (started at boot) and
-restarts `music-go`. Music stops for a few seconds.
+restarts `music-go`. Because `/data` is mounted after systemd loads its units, the service is
+also started at boot by an `@reboot` entry in the RPM crontab (`boot.sh`). Music stops for a few seconds.
 
 | Option | Effect |
 |---|---|
