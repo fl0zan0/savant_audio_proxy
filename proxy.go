@@ -375,8 +375,11 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 			break
 		}
 		uri, _ := it["uri"].(string)
+		// MA's AirPlay session keeps the output: any other play must close it first.
+		stopMA := false
 		if !strings.HasPrefix(uri, "ma:") {
-			p.maActive.Store(false)
+			wasMA := p.maActive.Swap(false)
+			stopMA = p.ma != nil && asInt(dm["action"], 0) == 5 && (wasMA || p.airplay.Load())
 		}
 		switch {
 		case p.rd != nil && strings.HasPrefix(uri, radioPrefix+":station:"):
@@ -390,18 +393,16 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 			d2 := cloneMap(dm)
 			d2["item"] = pi
 			j2["data"] = d2
-			if p.ma != nil && p.airplay.Load() {
-				// Close MA's AirPlay session first, then forward with the same request id.
-				go func() {
-					p.ma.stopPlayer()
-					time.Sleep(1500 * time.Millisecond)
-					h.sendJSON(j2, "proxy->mg")
-				}()
+			if stopMA {
+				go h.stopMAThenSend(j2)
 				return drop, nil
 			}
 			return modified, j2
 		case p.ma != nil && strings.HasPrefix(uri, "ma:"):
 			go h.answerMAAction(j, uri, str(it, "parentUri"))
+			return drop, nil
+		case stopMA: // a play from Recents, Favorites, TuneIn, ... while MA plays
+			go h.stopMAThenSend(j)
 			return drop, nil
 		}
 	case "getTransports", "getLikedState", "getArtwork":
@@ -475,6 +476,13 @@ func (h *hostConn) answerMAAction(j map[string]any, uri, parent string) {
 	if h.p.rd != nil {
 		h.p.rd.stopWatching()
 	}
+}
+
+// stopMAThenSend closes MA's AirPlay session, then forwards the request (same id) to music-go.
+func (h *hostConn) stopMAThenSend(j map[string]any) {
+	h.p.ma.stopPlayer()
+	time.Sleep(1500 * time.Millisecond)
+	h.sendJSON(j, "proxy->mg")
 }
 
 var maTransport = map[string]string{"next": "next", "previous": "previous", "pause": "pause",
