@@ -67,7 +67,11 @@ type proxy struct {
 	lastPushID atomic.Int64
 	// airplay is true while music-go's current item is an AirPlay one. music-go refuses every
 	// other play ("no active playback source for uri") until the AirPlay session is closed.
-	airplay   atomic.Bool
+	airplay atomic.Bool
+	// maActive is true while MA's queue for this unit is the current source. music-go keeps
+	// sending its last radio's pushes during MA's AirPlay session and sends the transport
+	// keys to the radio, so the proxy drops those pushes and sends the keys to MA.
+	maActive  atomic.Bool
 	lastItems sync.Map // mount -> last music-go now-playing item (map[string]any, flat)
 
 	ownMu  sync.Mutex
@@ -255,6 +259,9 @@ func (h *hostConn) pumpMG(r *bufio.Reader) {
 		}
 		if j != nil && f.fin {
 			if mod := h.onMG(j); mod != nil {
+				if mod["\x00drop"] == true {
+					continue
+				}
 				b := marshal(mod)
 				L.rec(map[string]any{"c": h.id, "dir": "proxy->host", "json": mod})
 				out = encodeFrame(f.op, b, false)
@@ -368,6 +375,9 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 			break
 		}
 		uri, _ := it["uri"].(string)
+		if !strings.HasPrefix(uri, "ma:") {
+			p.maActive.Store(false)
+		}
 		switch {
 		case p.rd != nil && strings.HasPrefix(uri, radioPrefix+":station:"):
 			pi, ok := p.rd.playItem(uri)
@@ -391,7 +401,7 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 			}
 			return modified, j2
 		case p.ma != nil && strings.HasPrefix(uri, "ma:"):
-			go h.answerMAAction(j, uri)
+			go h.answerMAAction(j, uri, str(it, "parentUri"))
 			return drop, nil
 		}
 	case "getTransports", "getLikedState", "getArtwork":
@@ -401,6 +411,13 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 				v = false
 			}
 			go h.reply(j, v)
+			return drop, nil
+		}
+	case "next", "previous", "pause", "play", "playPause", "stop":
+		// music-go sends these to its last radio or to the AirPlay sender, which MA ignores:
+		// when MA's queue for this unit is the current source, send them to MA directly.
+		if p.ma != nil && (p.maActive.Load() || p.airplay.Load()) {
+			go h.answerMATransport(j, q)
 			return drop, nil
 		}
 	}
@@ -443,25 +460,68 @@ func (h *hostConn) answerBrowse(j map[string]any, uri string, offset, limit int)
 	h.reply(j, map[string]any{"items": items, "screen": screen, "metadata": nil, "error": ""})
 }
 
-func (h *hostConn) answerMAAction(j map[string]any, uri string) {
+func (h *hostConn) answerMAAction(j map[string]any, uri, parent string) {
 	if !strings.HasPrefix(uri, "ma:obj:") {
 		h.reply(j, map[string]any{"items": nil, "screen": 0, "metadata": nil, "error": "This folder cannot be read."})
 		return
 	}
 	// MA's play_media returns only once playback started (4-6 s): acknowledge first.
 	h.reply(j, map[string]any{"items": nil, "screen": 0, "metadata": nil, "error": ""})
-	if err := h.p.ma.play(uri); err != nil {
+	if err := h.p.ma.play(uri, parent); err != nil {
 		logEvent("ma_error", "c", h.id, "uri", uri, "err", err.Error())
+		return
+	}
+	h.p.maActive.Store(true)
+	if h.p.rd != nil {
+		h.p.rd.stopWatching()
 	}
 }
 
-// onMG inspects a music-go -> host message; returns a replacement or nil.
+var maTransport = map[string]string{"next": "next", "previous": "previous", "pause": "pause",
+	"play": "play", "playPause": "play_pause", "stop": "stop"}
+
+// answerMATransport sends a transport key to MA if MA's queue for this unit is playing or
+// paused, otherwise (another AirPlay sender such as an iPhone, or MA stopped from its own app)
+// forwards the request to music-go unchanged.
+func (h *hostConn) answerMATransport(j map[string]any, q string) {
+	if !h.p.ma.queueActive() {
+		h.p.maActive.Store(false)
+		h.sendJSON(j, "proxy->mg")
+		return
+	}
+	h.p.maActive.Store(true)
+	err := h.p.ma.queueCmd(maTransport[q])
+	logEvent("ma_transport", "c", h.id, "cmd", q, "err", errStr(err))
+	var v any = true // music-go answers play/pause/stop with true
+	if q == "next" || q == "previous" {
+		v = map[string]any{"code": 0, "display": nil, "message": ""}
+	}
+	h.reply(j, v)
+}
+
+func errStr(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// dropMsg returned by onMG means: do not pass the message to the host.
+var dropMsg = map[string]any{"\x00drop": true}
+
+// onMG inspects a music-go -> host message; returns a replacement, dropMsg or nil.
 func (h *hostConn) onMG(j map[string]any) map[string]any {
 	p := h.p
 	ev := asInt(j["event"], 0)
 	rid := idKey(j["id"])
 	if ev != 0 {
 		p.lastPushID.Store(int64(asInt(j["id"], 0)))
+		if p.maActive.Load() {
+			switch src, _ := j["source"].(string); src {
+			case "internal_stream", "gstreamer", "tunein":
+				return dropMsg // the last radio's pushes would cover MA's now playing
+			}
+		}
 		p.trackSource(j)
 		return p.rewritePush(j)
 	}
@@ -626,7 +686,9 @@ func (h *hostConn) activateTuneIn() {
 func (p *proxy) trackSource(j map[string]any) {
 	switch src, _ := j["source"].(string); src {
 	case "airplay2", "airplay":
-		p.airplay.Store(true)
+		if !p.airplay.Swap(true) && p.rd != nil {
+			p.rd.stopWatching() // the radio's live metadata must not cover AirPlay's
+		}
 	case "gstreamer", "internal_stream":
 		p.airplay.Store(false)
 	}
@@ -670,6 +732,9 @@ func (p *proxy) rewritePush(j map[string]any) map[string]any {
 // pushMeta sends an immediate metadata update (event 8, same shape music-go uses for stream
 // metadata) to every connected host when the radio server reports a new song.
 func (p *proxy) pushMeta(mount string) {
+	if p.airplay.Load() || p.maActive.Load() {
+		return // AirPlay (MA, an iPhone...) is playing, not the radio
+	}
 	v, ok := p.lastItems.Load(mount)
 	if !ok {
 		return

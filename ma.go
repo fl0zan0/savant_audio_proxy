@@ -31,6 +31,10 @@ type maClient struct {
 	pmu      sync.Mutex
 	pending  map[string]chan maResult
 	partials map[string][]any
+	parents  sync.Map // track uri ("ma:obj:...") -> album/playlist uri it was listed in
+
+	tmu       sync.Mutex
+	libTracks []string // "ma:obj:" uris of the library tracks list, in the order shown
 }
 
 type maResult struct {
@@ -311,7 +315,11 @@ func (m *maClient) list(uri string, offset, limit int) ([]map[string]any, error)
 		if err != nil {
 			return nil, err
 		}
-		return m.mapList(res, uri), nil
+		l := m.mapList(res, uri)
+		if kind == "tracks" {
+			m.rememberTracks(l, offset)
+		}
+		return l, nil
 	case strings.HasPrefix(uri, "ma:browse:"):
 		p, _ := url.QueryUnescape(strings.TrimPrefix(uri, "ma:browse:"))
 		args := map[string]any{}
@@ -339,14 +347,116 @@ func (m *maClient) list(uri string, offset, limit int) ([]map[string]any, error)
 		if err != nil {
 			return nil, err
 		}
-		return page(m.mapList(res, uri), offset, limit), nil
+		l := m.mapList(res, uri)
+		if mt == "album" || mt == "playlist" { // Savant does not send parentUri back on play
+			for _, it := range l {
+				m.parents.Store(str(it, "uri"), uri)
+			}
+		}
+		return page(l, offset, limit), nil
 	}
 	return nil, nil
 }
 
-func (m *maClient) play(uri string) error {
+// rememberTracks records a page of the library tracks list, so that a track played from it
+// can queue the tracks shown after it.
+func (m *maClient) rememberTracks(l []map[string]any, offset int) {
+	m.tmu.Lock()
+	defer m.tmu.Unlock()
+	if offset == 0 || offset > len(m.libTracks) {
+		m.libTracks = m.libTracks[:0]
+		if offset != 0 {
+			return // a gap: we cannot know the order before this page
+		}
+	}
+	m.libTracks = m.libTracks[:offset]
+	for _, it := range l {
+		u := str(it, "uri")
+		m.libTracks = append(m.libTracks, u)
+		m.parents.Store(u, "ma:lib:tracks")
+	}
+}
+
+// tracksFrom returns up to max MA uris of the library tracks list, from uri on.
+func (m *maClient) tracksFrom(uri string, max int) []any {
+	m.tmu.Lock()
+	defer m.tmu.Unlock()
+	for i, u := range m.libTracks {
+		if u != uri {
+			continue
+		}
+		var out []any
+		for _, v := range m.libTracks[i:] {
+			if len(out) == max {
+				break
+			}
+			mu, _ := url.QueryUnescape(strings.TrimPrefix(v, "ma:obj:"))
+			out = append(out, mu)
+		}
+		return out
+	}
+	return nil
+}
+
+// maMediaType returns the media type of an "ma:obj:" uri (track, album, playlist, ...).
+func maMediaType(uri string) string {
 	mu, _ := url.QueryUnescape(strings.TrimPrefix(uri, "ma:obj:"))
+	_, rest, ok := strings.Cut(mu, "://")
+	if !ok {
+		return ""
+	}
+	mt, _, _ := strings.Cut(rest, "/")
+	return mt
+}
+
+// play replaces MA's queue for this unit. So that the skip keys have somewhere to go, a track
+// chosen inside an album or a playlist queues the whole album/playlist from that track, and a
+// track chosen in the library tracks list queues the tracks shown after it (up to 100).
+func (m *maClient) play(uri, parent string) error {
+	mu, _ := url.QueryUnescape(strings.TrimPrefix(uri, "ma:obj:"))
+	if parent == "" {
+		if v, ok := m.parents.Load(uri); ok {
+			parent = v.(string)
+		}
+	}
+	if parent == "ma:lib:tracks" {
+		if l := m.tracksFrom(uri, 100); len(l) > 1 {
+			_, err := m.call("player_queues/play_media", map[string]any{"queue_id": m.player, "media": l, "option": "replace"})
+			if err == nil {
+				return nil
+			}
+			logEvent("ma_play_list_error", "n", len(l), "err", err.Error())
+		}
+	}
+	if pt := maMediaType(parent); strings.HasPrefix(parent, "ma:obj:") && maMediaType(uri) == "track" &&
+		(pt == "album" || pt == "playlist") {
+		pu, _ := url.QueryUnescape(strings.TrimPrefix(parent, "ma:obj:"))
+		_, err := m.call("player_queues/play_media", map[string]any{"queue_id": m.player, "media": pu,
+			"option": "replace", "start_item": mu})
+		if err == nil {
+			return nil
+		}
+		logEvent("ma_play_from_error", "parent", pu, "err", err.Error())
+	}
 	_, err := m.call("player_queues/play_media", map[string]any{"queue_id": m.player, "media": mu, "option": "replace"})
+	return err
+}
+
+// queueActive reports whether MA's queue for this unit is playing or paused.
+func (m *maClient) queueActive() bool {
+	res, err := m.call("player_queues/get", map[string]any{"queue_id": m.player})
+	if err != nil {
+		logEvent("ma_queue_error", "err", err.Error())
+		return false
+	}
+	q, _ := res.(map[string]any)
+	st := str(q, "state")
+	return st == "playing" || st == "paused"
+}
+
+// queueCmd sends a queue command without arguments (next, previous) to MA.
+func (m *maClient) queueCmd(cmd string) error {
+	_, err := m.call("player_queues/"+cmd, map[string]any{"queue_id": m.player})
 	return err
 }
 

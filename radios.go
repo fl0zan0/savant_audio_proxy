@@ -278,6 +278,17 @@ func (rd *radios) unwatch(stop chan struct{}) {
 	}
 }
 
+// stopWatching stops following the current station's metadata (another source took over).
+func (rd *radios) stopWatching() {
+	rd.watchMu.Lock()
+	defer rd.watchMu.Unlock()
+	if rd.stopW != nil {
+		close(rd.stopW)
+		logEvent("radio_unwatch", "mount", rd.watching)
+	}
+	rd.watching, rd.stopW = "", nil
+}
+
 func (rd *radios) idle() bool {
 	d := rd.icyIdle
 	if d == 0 {

@@ -86,6 +86,12 @@ func main() {
 			addr += ":8095"
 		}
 		p.ma = newMA(addr, strings.TrimSpace(string(tok)), *maPlayer)
+		go func() { // MA may already be playing on this unit (proxy restarted)
+			if p.ma.queueActive() {
+				p.maActive.Store(true)
+				logEvent("ma_active", "at", "startup")
+			}
+		}()
 	}
 
 	ln, err := net.Listen("tcp", *listen)
