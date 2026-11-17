@@ -8,19 +8,25 @@ audio server (Tested with **PAV-SMS2001**):
   metadata).
 - **Music Assistant** *(optional)*: browse a [Music Assistant](https://music-assistant.io)
   library from the Savant app, played over AirPlay 2 on the Savant audio server.
+- **Roon** *(optional)*: browse a [Roon](https://roon.app) Server's library from the Savant
+  app, played over AirPlay on the Savant audio server (needs a licensed Roon Server).
+
+With Music Assistant or Roon, the Savant transport keys (play/pause, next, previous) control
+the queue, and a track picked in an album or a playlist plays the rest of it.
 
 ## How it works
 
 The Savant host talks to `music-go` (the Savant audio server's music service) on port 4028.
 `savant-audio-proxy` sits in between: an iptables rule redirects port 4028 to the proxy (port
 14028), which forwards everything to `music-go` and adds its own entries (the radios tile,
-"Music Assistant") to the responses.
+"Music Assistant", "Roon") to the responses.
 
 ```
 Savant app ─► Savant host ─► :4028 ──iptables──► savant-audio-proxy :14028 ─► music-go 127.0.0.1:4028
                                                       │
                                                       ├─ M3U playlist + now playing (ICY or metadata server)
-                                                      └─ Music Assistant (optional)
+                                                      ├─ Music Assistant (optional)
+                                                      └─ Roon (optional)
 ```
 
 Radios are played by `music-go`'s own player (TuneIn custom stream). Uninstalling removes the
@@ -51,10 +57,12 @@ also started at boot by an `@reboot` entry in the RPM crontab (`boot.sh`). Music
 |---|---|
 | `--with-ma` | enables Music Assistant (prompts, or `MA_ADDR`, `MA_PLAYER`, `MA_TOKEN` variables) |
 | `--without-ma` | disables Music Assistant |
+| `--with-roon` | enables Roon (prompts, or `ROON_ADDR`, `ROON_ZONE` variables) |
+| `--without-roon` | disables Roon |
 | `--stations SOURCE` | station list: M3U file or http(s) URL |
 | `--version vX.Y.Z` | installs a specific version |
 
-**Update** to the latest release (`config.env`, `stations.m3u` and `ma_token` are kept; nothing
+**Update** to the latest release (`config.env`, `stations.m3u` and the tokens are kept; nothing
 happens if you already run the latest version):
 
 ```sh
@@ -119,6 +127,28 @@ You need:
 
 The Savant app then shows a "Music Assistant" tile. Playback goes over AirPlay 2 to the Savant
 audio server.
+
+## Roon
+
+> **Beta.** Tested live: registration, browsing (long lists included), AirPlay playback with
+> now playing, next. Still to validate on a real Roon Server: playing a track "from here",
+> pause/play/previous, switching from Roon to a radio.
+
+Needs a licensed Roon Server. First, in **Roon → Settings → Audio**, enable this Savant audio
+server's AirPlay device (it is a zone of its own, or part of one). Then:
+
+```sh
+sh /data/RPM/savant-audio-proxy/install.sh --with-roon
+```
+
+The installer asks for the Roon Server address (`192.168.1.20`, port 9330 by default) and the
+name of the zone (or of the AirPlay output) in Roon. Then, once, enable **Savant audio proxy**
+in **Roon → Settings → Extensions**; its token is kept in `roon_token`.
+
+The Savant app then shows a "Roon" tile with Roon's own menus (Library, Playlists, Qobuz/TIDAL,
+radios…). Folders open lists; a track, "Play Album" or "Play Playlist" plays in this unit's
+zone (a track plays "from here", so the rest of the album/playlist follows). Roon's search is
+not available from Savant.
 
 ## Settings
 

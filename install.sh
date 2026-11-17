@@ -15,6 +15,8 @@
 # Options:
 #   --with-ma          enable Music Assistant (asks for address, player and token)
 #   --without-ma       disable Music Assistant
+#   --with-roon        enable Roon (asks for the Roon Server address and this unit's zone)
+#   --without-roon     disable Roon
 #   --stations SOURCE  station list: M3U file or http(s) URL
 #   --version vX.Y.Z   install this version instead of the latest
 #   --update           download the latest release even when run from an installed folder;
@@ -24,9 +26,10 @@
 #
 # Environment variables (unattended install):
 #   MA_ADDR, MA_PLAYER, MA_TOKEN   Music Assistant settings for --with-ma
+#   ROON_ADDR, ROON_ZONE           Roon settings for --with-roon
 #   REPO                           GitHub repository (default fl0zan0/savant_audio_proxy)
 #
-# An update keeps config.env, stations.m3u and ma_token; only the program is replaced.
+# An update keeps config.env, stations.m3u, ma_token and roon_token; only the program is replaced.
 # Only root command used: "sudo systemctl" (allowed without password for RPM).
 # Music stops for a few seconds at the end (music-go restart).
 
@@ -47,6 +50,7 @@ fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
 # --- options ---------------------------------------------------------------------------
 WITH_MA=""        # "", yes, no
+WITH_ROON=""      # "", yes, no
 UPDATE=""
 FORCE=""
 OPT_STATIONS=""
@@ -64,6 +68,8 @@ for a in "$@"; do
     case $a in
         --with-ma)    WITH_MA=yes ;;
         --without-ma) WITH_MA=no ;;
+        --with-roon)    WITH_ROON=yes ;;
+        --without-roon) WITH_ROON=no ;;
         --update)     UPDATE=yes ;;
         --force)      FORCE=yes ;;
         --stations)   expect=stations ;;
@@ -206,6 +212,19 @@ elif [ "$WITH_MA" = no ]; then
 fi
 [ -f "$DEST_DIR/ma_token" ] && chmod 600 "$DEST_DIR/ma_token"
 
+if [ "$WITH_ROON" = yes ]; then
+    say "Roon"
+    ROON_ADDR=${ROON_ADDR:-}; ROON_ZONE=${ROON_ZONE:-}
+    [ -n "$ROON_ADDR" ] || ROON_ADDR=$(ask "Roon Server address (e.g. 192.168.1.20, port 9330 by default)" "")
+    [ -n "$ROON_ZONE" ] || ROON_ZONE=$(ask "name of this Savant audio server's AirPlay zone in Roon (Settings > Audio)" "")
+    [ -n "$ROON_ADDR" ] && [ -n "$ROON_ZONE" ] || fail "Roon Server address and zone are required."
+    no_space ROON_ADDR "$ROON_ADDR"
+    set_conf ROON_ADDR "$ROON_ADDR"
+    set_conf ROON_ZONE "$ROON_ZONE"
+elif [ "$WITH_ROON" = no ]; then
+    set_conf ROON_ADDR ""
+fi
+
 # shellcheck disable=SC1090
 . "$CONF"
 RADIOS_TITLE=${RADIOS_TITLE:-My Radios}
@@ -214,6 +233,8 @@ COVER_URL=${COVER_URL:-}
 ICY_METADATA=${ICY_METADATA:-yes}
 MA_ADDR=${MA_ADDR:-}
 MA_PLAYER=${MA_PLAYER:-}
+ROON_ADDR=${ROON_ADDR:-}
+ROON_ZONE=${ROON_ZONE:-}
 LOG_MAX_MB=${LOG_MAX_MB:-50}
 
 # --- command line ----------------------------------------------------------------------
@@ -223,6 +244,9 @@ no_space RADIOS_ICON "${RADIOS_ICON:-}"
 no_space MA_ADDR "$MA_ADDR"
 no_space MA_PLAYER "$MA_PLAYER" "$PLAYER_HINT"
 no_space MA_ICON "${MA_ICON:-}"
+no_space ROON_ADDR "$ROON_ADDR"
+no_space ROON_ICON "${ROON_ICON:-}"
+case $ROON_ZONE in *\"*) fail "ROON_ZONE must not contain double quotes." ;; esac
 case $RADIOS_TITLE in *\"*) fail "RADIOS_TITLE must not contain double quotes." ;; esac
 ARGS="--listen 0.0.0.0:$PORT --upstream 127.0.0.1:4028 --log $DEST_DIR/frames.jsonl --log-max-mb $LOG_MAX_MB"
 ARGS_TITLE=""
@@ -257,6 +281,16 @@ if [ -n "$MA_ADDR" ]; then
 else
     echo "   Music Assistant disabled."
 fi
+if [ -n "$ROON_ADDR" ]; then
+    [ -n "$ROON_ZONE" ] || fail "ROON_ADDR is set but ROON_ZONE is empty ($CONF)."
+    # The zone name may contain spaces: quoted for systemd.
+    ARGS="$ARGS --roon $ROON_ADDR --roon-token-file $DEST_DIR/roon_token --roon-zone \"$ROON_ZONE\""
+    [ -n "${ROON_ICON:-}" ] && ARGS="$ARGS --roon-icon $ROON_ICON"
+    echo "   Roon: $ROON_ADDR (zone \"$ROON_ZONE\")"
+    [ -s "$DEST_DIR/roon_token" ] || ROON_FIRST=yes
+else
+    echo "   Roon disabled."
+fi
 
 # --- systemd service -------------------------------------------------------------------
 say "Creating the $UNIT service"
@@ -271,9 +305,10 @@ RULE="-p tcp --dport 4028 -j REDIRECT --to-ports $PORT"
     echo "ExecStartPre=-/usr/sbin/iptables -t nat -D PREROUTING $RULE"
     echo "ExecStartPre=/usr/sbin/iptables -t nat -I PREROUTING $RULE"
     if [ -n "$ARGS_TITLE" ]; then
-        echo "ExecStart=$DEST_DIR/$NAME $ARGS $ARGS_TITLE \"$RADIOS_TITLE\""
+        # "%" starts a systemd specifier: doubled (URLs such as wsrv.nl/%3Furl...).
+        echo "ExecStart=$DEST_DIR/$NAME $ARGS $ARGS_TITLE \"$RADIOS_TITLE\"" | sed 's/%/%%/g'
     else
-        echo "ExecStart=$DEST_DIR/$NAME $ARGS"
+        echo "ExecStart=$DEST_DIR/$NAME $ARGS" | sed 's/%/%%/g'
     fi
     echo "ExecStopPost=-/usr/sbin/iptables -t nat -D PREROUTING $RULE"
     echo "Restart=on-failure"
@@ -349,5 +384,9 @@ echo "   settings: $CONF"
 echo "   log: $DEST_DIR/frames.jsonl"
 echo "   update: $DEST_DIR/update.sh"
 echo "   uninstall: $DEST_DIR/uninstall.sh"
+if [ "${ROON_FIRST:-}" = yes ]; then
+    echo ""
+    echo "   Roon: enable \"Savant audio proxy\" in Roon > Settings > Extensions (once)."
+fi
 echo ""
 echo "Installation complete."

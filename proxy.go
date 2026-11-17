@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"net"
 	"strings"
@@ -44,6 +45,18 @@ func svItem(title, uri, parent, subtitle, art string, k itemKind, account string
 	}
 }
 
+// tileItem is a music home tile: its artworkKey changes with its image, so that the Savant app,
+// which caches images by artworkKey, shows a new tile image instead of the cached one.
+func tileItem(title, uri, art, account string) map[string]any {
+	e := svItem(title, uri, "root", "", art, kindFolder, account)
+	if art != "" {
+		h := fnv.New32a()
+		h.Write([]byte(art))
+		e["artworkKey"] = fmt.Sprintf("%s@%08x", uri, h.Sum32())
+	}
+	return e
+}
+
 func serviceInfo(prefix, name, account string) map[string]any {
 	return map[string]any{
 		"prefix": prefix, "name": name, "landing_url": "", "password_url": "",
@@ -58,8 +71,9 @@ func serviceInfo(prefix, name, account string) map[string]any {
 
 type proxy struct {
 	upstream string
-	rd       *radios   // nil = radios disabled
-	ma       *maClient // nil = MA disabled
+	rd       *radios     // nil = radios disabled
+	ma       *maClient   // nil = MA disabled
+	roon     *roonClient // nil = Roon disabled
 
 	mu    sync.Mutex
 	conns map[*hostConn]struct{}
@@ -68,16 +82,23 @@ type proxy struct {
 	// airplay is true while music-go's current item is an AirPlay one. music-go refuses every
 	// other play ("no active playback source for uri") until the AirPlay session is closed.
 	airplay atomic.Bool
-	// maActive is true while MA's queue for this unit is the current source. music-go keeps
-	// sending its last radio's pushes during MA's AirPlay session and sends the transport
-	// keys to the radio, so the proxy drops those pushes and sends the keys to MA.
-	maActive  atomic.Bool
+	// ext is the external source (MA or Roon, over AirPlay) currently playing, started from
+	// the Savant app. music-go keeps sending its last radio's pushes during the AirPlay
+	// session and sends the transport keys to that radio, so the proxy drops those pushes and
+	// sends the keys to the external source.
+	ext       atomic.Int32
 	lastItems sync.Map // mount -> last music-go now-playing item (map[string]any, flat)
 
 	ownMu  sync.Mutex
 	ownIDs map[string]bool // ids of requests the proxy itself sent to music-go
 	ownSeq atomic.Int64
 }
+
+const (
+	extNone int32 = iota
+	extMA
+	extRoon
+)
 
 type hostConn struct {
 	id       int64
@@ -284,7 +305,8 @@ const (
 
 func ours(v any) bool {
 	s, ok := v.(string)
-	return ok && (strings.HasPrefix(s, radioPrefix+":") || strings.HasPrefix(s, maPrefix+":"))
+	return ok && (strings.HasPrefix(s, radioPrefix+":") || strings.HasPrefix(s, maPrefix+":") ||
+		strings.HasPrefix(s, roonPrefix+":"))
 }
 
 func asInt(v any, def int) int {
@@ -375,11 +397,12 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 			break
 		}
 		uri, _ := it["uri"].(string)
-		// MA's AirPlay session keeps the output: any other play must close it first.
-		stopMA := false
-		if !strings.HasPrefix(uri, "ma:") {
-			wasMA := p.maActive.Swap(false)
-			stopMA = p.ma != nil && asInt(dm["action"], 0) == 5 && (wasMA || p.airplay.Load())
+		// MA's or Roon's AirPlay session keeps the output: any other play must close it first.
+		stopExt, was := false, extNone
+		if !strings.HasPrefix(uri, "ma:") && !strings.HasPrefix(uri, roonPrefix+":") {
+			was = p.ext.Swap(extNone)
+			stopExt = (p.ma != nil || p.roon != nil) && asInt(dm["action"], 0) == 5 &&
+				(was != extNone || p.airplay.Load())
 		}
 		switch {
 		case p.rd != nil && strings.HasPrefix(uri, radioPrefix+":station:"):
@@ -393,16 +416,19 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 			d2 := cloneMap(dm)
 			d2["item"] = pi
 			j2["data"] = d2
-			if stopMA {
-				go h.stopMAThenSend(j2)
+			if stopExt {
+				go h.stopExtThenSend(j2, was)
 				return drop, nil
 			}
 			return modified, j2
 		case p.ma != nil && strings.HasPrefix(uri, "ma:"):
 			go h.answerMAAction(j, uri, str(it, "parentUri"))
 			return drop, nil
-		case stopMA: // a play from Recents, Favorites, TuneIn, ... while MA plays
-			go h.stopMAThenSend(j)
+		case p.roon != nil && strings.HasPrefix(uri, roonPrefix+":"):
+			go h.answerRoonAction(j, uri)
+			return drop, nil
+		case stopExt: // a play from Recents, Favorites, TuneIn, ... while MA or Roon plays
+			go h.stopExtThenSend(j, was)
 			return drop, nil
 		}
 	case "getTransports", "getLikedState", "getArtwork":
@@ -416,9 +442,9 @@ func (h *hostConn) onHost(j map[string]any) (verdict, map[string]any) {
 		}
 	case "next", "previous", "pause", "play", "playPause", "stop":
 		// music-go sends these to its last radio or to the AirPlay sender, which MA ignores:
-		// when MA's queue for this unit is the current source, send them to MA directly.
-		if p.ma != nil && (p.maActive.Load() || p.airplay.Load()) {
-			go h.answerMATransport(j, q)
+		// when MA or Roon is the current source, send them there directly.
+		if (p.ma != nil || p.roon != nil) && (p.ext.Load() != extNone || p.airplay.Load()) {
+			go h.answerTransport(j, q)
 			return drop, nil
 		}
 	}
@@ -442,6 +468,8 @@ func (h *hostConn) answerBrowse(j map[string]any, uri string, offset, limit int)
 		items = p.rd.list(offset, limit)
 	case p.ma != nil && strings.HasPrefix(uri, "ma:"):
 		items, err = p.ma.list(uri, offset, limit)
+	case p.roon != nil && strings.HasPrefix(uri, roonPrefix+":"):
+		items, err = p.roon.list(uri, offset, limit)
 	}
 	if err != nil {
 		logEvent("browse_error", "c", h.id, "uri", uri, "err", err.Error())
@@ -468,19 +496,58 @@ func (h *hostConn) answerMAAction(j map[string]any, uri, parent string) {
 	}
 	// MA's play_media returns only once playback started (4-6 s): acknowledge first.
 	h.reply(j, map[string]any{"items": nil, "screen": 0, "metadata": nil, "error": ""})
+	h.handOver(extMA)
 	if err := h.p.ma.play(uri, parent); err != nil {
 		logEvent("ma_error", "c", h.id, "uri", uri, "err", err.Error())
 		return
 	}
-	h.p.maActive.Store(true)
+	h.startedExt(extMA)
+}
+
+func (h *hostConn) answerRoonAction(j map[string]any, uri string) {
+	h.reply(j, map[string]any{"items": nil, "screen": 0, "metadata": nil, "error": ""})
+	h.handOver(extRoon)
+	if err := h.p.roon.play(uri); err != nil {
+		logEvent("roon_error", "c", h.id, "uri", uri, "err", err.Error())
+		return
+	}
+	h.startedExt(extRoon)
+}
+
+// handOver stops the other external source before src plays: two AirPlay senders would
+// fight over the output.
+func (h *hostConn) handOver(src int32) {
+	p := h.p
+	switch cur := p.ext.Load(); {
+	case cur == extMA && src != extMA:
+		p.ma.stopPlayer()
+	case cur == extRoon && src != extRoon:
+		p.roon.stop()
+	default:
+		return
+	}
+	p.ext.Store(extNone)
+	time.Sleep(1500 * time.Millisecond)
+}
+
+func (h *hostConn) startedExt(src int32) {
+	h.p.ext.Store(src)
 	if h.p.rd != nil {
 		h.p.rd.stopWatching()
 	}
 }
 
-// stopMAThenSend closes MA's AirPlay session, then forwards the request (same id) to music-go.
-func (h *hostConn) stopMAThenSend(j map[string]any) {
-	h.p.ma.stopPlayer()
+// stopExtThenSend closes the external source's AirPlay session (was = the one known to play,
+// or extNone with an AirPlay session of unknown origin: stop both), then forwards the request
+// (same id) to music-go.
+func (h *hostConn) stopExtThenSend(j map[string]any, was int32) {
+	p := h.p
+	if p.ma != nil && (was == extMA || was == extNone) {
+		p.ma.stopPlayer()
+	}
+	if p.roon != nil && (was == extRoon || was == extNone) {
+		p.roon.stop()
+	}
 	time.Sleep(1500 * time.Millisecond)
 	h.sendJSON(j, "proxy->mg")
 }
@@ -488,18 +555,42 @@ func (h *hostConn) stopMAThenSend(j map[string]any) {
 var maTransport = map[string]string{"next": "next", "previous": "previous", "pause": "pause",
 	"play": "play", "playPause": "play_pause", "stop": "stop"}
 
-// answerMATransport sends a transport key to MA if MA's queue for this unit is playing or
-// paused, otherwise (another AirPlay sender such as an iPhone, or MA stopped from its own app)
-// forwards the request to music-go unchanged.
-func (h *hostConn) answerMATransport(j map[string]any, q string) {
-	if !h.p.ma.queueActive() {
-		h.p.maActive.Store(false)
+// activeExt returns the external source playing or paused on this unit, checking the one
+// last started first.
+func (p *proxy) activeExt() int32 {
+	order := []int32{extMA, extRoon}
+	if p.ext.Load() == extRoon {
+		order = []int32{extRoon, extMA}
+	}
+	for _, s := range order {
+		if s == extMA && p.ma != nil && p.ma.queueActive() {
+			return extMA
+		}
+		if s == extRoon && p.roon != nil && p.roon.active() {
+			return extRoon
+		}
+	}
+	return extNone
+}
+
+// answerTransport sends a transport key to MA or Roon if one of them plays on this unit,
+// otherwise (another AirPlay sender such as an iPhone, or playback stopped from MA's or Roon's
+// own app) forwards the request to music-go unchanged.
+func (h *hostConn) answerTransport(j map[string]any, q string) {
+	src := h.p.activeExt()
+	h.p.ext.Store(src)
+	var err error
+	switch src {
+	case extMA:
+		err = h.p.ma.queueCmd(maTransport[q])
+		logEvent("ma_transport", "c", h.id, "cmd", q, "err", errStr(err))
+	case extRoon:
+		err = h.p.roon.control(q)
+		logEvent("roon_transport", "c", h.id, "cmd", q, "err", errStr(err))
+	default:
 		h.sendJSON(j, "proxy->mg")
 		return
 	}
-	h.p.maActive.Store(true)
-	err := h.p.ma.queueCmd(maTransport[q])
-	logEvent("ma_transport", "c", h.id, "cmd", q, "err", errStr(err))
 	var v any = true // music-go answers play/pause/stop with true
 	if q == "next" || q == "previous" {
 		v = map[string]any{"code": 0, "display": nil, "message": ""}
@@ -524,7 +615,7 @@ func (h *hostConn) onMG(j map[string]any) map[string]any {
 	rid := idKey(j["id"])
 	if ev != 0 {
 		p.lastPushID.Store(int64(asInt(j["id"], 0)))
-		if p.maActive.Load() {
+		if p.ext.Load() != extNone {
 			switch src, _ := j["source"].(string); src {
 			case "internal_stream", "gstreamer", "tunein":
 				return dropMsg // the last radio's pushes would cover MA's now playing
@@ -561,6 +652,9 @@ func (h *hostConn) onMG(j map[string]any) map[string]any {
 		if p.ma != nil {
 			inject = append(inject, p.ma.rootEntry())
 		}
+		if p.roon != nil {
+			inject = append(inject, p.roon.rootEntry())
+		}
 		at := 1
 		if len(kept) < at {
 			at = len(kept)
@@ -584,7 +678,7 @@ func (h *hostConn) onMG(j map[string]any) map[string]any {
 		}
 		var out []any
 		for _, s := range l {
-			if s != radioPrefix && s != maPrefix {
+			if s != radioPrefix && s != maPrefix && s != roonPrefix {
 				out = append(out, s)
 			}
 		}
@@ -593,6 +687,9 @@ func (h *hostConn) onMG(j map[string]any) map[string]any {
 		}
 		if p.ma != nil {
 			out = append(out, maPrefix)
+		}
+		if p.roon != nil {
+			out = append(out, roonPrefix)
 		}
 		j2 := cloneMap(j)
 		j2["data"] = out
@@ -609,7 +706,8 @@ func (h *hostConn) onMG(j map[string]any) map[string]any {
 		}
 		var out []any
 		for _, s := range svcs {
-			if sm, ok := s.(map[string]any); ok && (sm["prefix"] == radioPrefix || sm["prefix"] == maPrefix) {
+			if sm, ok := s.(map[string]any); ok && (sm["prefix"] == radioPrefix || sm["prefix"] == maPrefix ||
+				sm["prefix"] == roonPrefix) {
 				continue
 			}
 			out = append(out, s)
@@ -619,6 +717,9 @@ func (h *hostConn) onMG(j map[string]any) map[string]any {
 		}
 		if p.ma != nil {
 			out = append(out, serviceInfo(maPrefix, maTitle, maAccount))
+		}
+		if p.roon != nil {
+			out = append(out, serviceInfo(roonPrefix, roonTitle, roonAccount))
 		}
 		if p.rd != nil {
 			for _, sv := range svcs {
@@ -740,7 +841,7 @@ func (p *proxy) rewritePush(j map[string]any) map[string]any {
 // pushMeta sends an immediate metadata update (event 8, same shape music-go uses for stream
 // metadata) to every connected host when the radio server reports a new song.
 func (p *proxy) pushMeta(mount string) {
-	if p.airplay.Load() || p.maActive.Load() {
+	if p.airplay.Load() || p.ext.Load() != extNone {
 		return // AirPlay (MA, an iPhone...) is playing, not the radio
 	}
 	v, ok := p.lastItems.Load(mount)

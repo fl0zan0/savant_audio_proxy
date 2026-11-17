@@ -33,7 +33,11 @@ func main() {
 	icy := flag.Bool("icy", true, "without --cover-url, read now-playing titles from the stream's ICY metadata")
 	title := flag.String("radios-title", "My Radios", "name of the radios tile shown in Savant")
 	radiosIcon := flag.String("radios-icon", "", "image URL for the radios tile (default: first station logo)")
-	maIcon := flag.String("ma-icon", "", "image URL for the \"Music Assistant\" tile")
+	maIcon := flag.String("ma-icon", defaultMAIcon, "image URL for the \"Music Assistant\" tile (\"none\" = no image)")
+	roonAddr := flag.String("roon", "", "Roon Server host[:port] (default port 9330); empty = Roon disabled")
+	roonToken := flag.String("roon-token-file", "", "file keeping the Roon extension token (written by the proxy)")
+	roonZone := flag.String("roon-zone", "", "name of this Savant audio server's AirPlay zone (or output) in Roon")
+	roonIcon := flag.String("roon-icon", defaultRoonIcon, "image URL for the \"Roon\" tile (\"none\" = no image)")
 	maAddr := flag.String("ma", "", "Music Assistant HOST:PORT; empty = disabled")
 	maTokenFile := flag.String("ma-token-file", "", "file holding an MA long-lived token")
 	maPlayer := flag.String("ma-player", "", "MA player_id of this unit's AirPlay player")
@@ -70,7 +74,7 @@ func main() {
 			}()
 		}
 	}
-	maIconURL = *maIcon
+	maIconURL = iconURL(*maIcon)
 	if *maAddr != "" {
 		if *maTokenFile == "" || *maPlayer == "" {
 			fmt.Fprintln(os.Stderr, "--ma needs --ma-token-file and --ma-player")
@@ -88,10 +92,30 @@ func main() {
 		p.ma = newMA(addr, strings.TrimSpace(string(tok)), *maPlayer)
 		go func() { // MA may already be playing on this unit (proxy restarted)
 			if p.ma.queueActive() {
-				p.maActive.Store(true)
+				p.ext.Store(extMA)
 				logEvent("ma_active", "at", "startup")
 			}
 		}()
+	}
+
+	roonIconURL = iconURL(*roonIcon)
+	if *roonAddr != "" {
+		if *roonToken == "" || *roonZone == "" {
+			fmt.Fprintln(os.Stderr, "--roon needs --roon-token-file and --roon-zone")
+			os.Exit(2)
+		}
+		addr := *roonAddr
+		if !strings.Contains(addr, ":") {
+			addr += ":9330"
+		}
+		r := newRoon(addr, *roonToken, *roonZone)
+		r.onRegistered = func() { // Roon may already be playing on this unit (proxy restarted)
+			if p.ext.Load() == extNone && r.active() {
+				p.ext.Store(extRoon)
+				logEvent("roon_active", "at", "startup")
+			}
+		}
+		p.roon = r
 	}
 
 	ln, err := net.Listen("tcp", *listen)
@@ -110,4 +134,18 @@ func main() {
 		}
 		go p.serve(c)
 	}
+}
+
+// Tile logos (dashboardicons.com, homarr-labs/dashboard-icons), used unless replaced.
+const (
+	defaultMAIcon   = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/music-assistant.png"
+	defaultRoonIcon = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/roon.png"
+)
+
+// iconURL maps the "none" setting to no image.
+func iconURL(s string) string {
+	if s == "none" {
+		return ""
+	}
+	return s
 }

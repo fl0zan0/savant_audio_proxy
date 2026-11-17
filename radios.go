@@ -194,7 +194,7 @@ func (rd *radios) rootEntry() map[string]any {
 		}
 		rd.mu.RUnlock()
 	}
-	e := svItem(radioTitle, radioPrefix+":root", "root", "", icon, kindFolder, radioAccount)
+	e := tileItem(radioTitle, radioPrefix+":root", icon, radioAccount)
 	e["displayData"] = map[string]any{"displayType": 3, "data": rd.list(0, 12)}
 	return e
 }

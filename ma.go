@@ -211,7 +211,7 @@ func (m *maClient) rootMenu() []map[string]any {
 var maIconURL string
 
 func (m *maClient) rootEntry() map[string]any {
-	e := svItem(maTitle, "ma:root", "root", "", maIconURL, kindFolder, maAccount)
+	e := tileItem(maTitle, "ma:root", maIconURL, maAccount)
 	e["displayData"] = map[string]any{"displayType": 3, "data": m.rootMenu()}
 	return e
 }
