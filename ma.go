@@ -196,7 +196,7 @@ func (m *maClient) call(cmd string, args map[string]any) (any, error) {
 
 var maLibMenu = [][2]string{
 	{"radios", "Radios"}, {"playlists", "Playlists"}, {"albums", "Albums"},
-	{"artists", "Artistes"}, {"tracks", "Morceaux"},
+	{"artists", "Artistes"}, {"tracks", "Morceaux"}, {"podcasts", "Podcasts"},
 }
 
 func (m *maClient) rootMenu() []map[string]any {
@@ -233,6 +233,13 @@ func (m *maClient) imageURL(it map[string]any) string {
 			imgs = append(imgs, im)
 		}
 	}
+	if pod, ok := it["podcast"].(map[string]any); ok { // episodes carry no image of their own
+		if md, ok := pod["metadata"].(map[string]any); ok {
+			if l, ok := md["images"].([]any); ok {
+				imgs = append(imgs, l...)
+			}
+		}
+	}
 	for _, x := range imgs {
 		im, _ := x.(map[string]any)
 		if im == nil || str(im, "path") == "" {
@@ -260,6 +267,19 @@ func maSubtitle(it map[string]any) string {
 			}
 		}
 	}
+	if len(names) == 0 {
+		switch str(it, "media_type") {
+		case "podcast":
+			return str(it, "publisher")
+		case "podcast_episode":
+			if d, ok := it["duration"].(float64); ok && d > 0 {
+				if d >= 3600 {
+					return fmt.Sprintf("%d h %02d", int(d)/3600, int(d)%3600/60)
+				}
+				return fmt.Sprintf("%d min", (int(d)+30)/60)
+			}
+		}
+	}
 	return strings.Join(names, ", ")
 }
 
@@ -272,7 +292,7 @@ func (m *maClient) toSv(it map[string]any, parent string) map[string]any {
 		return svItem(str(it, "name"), "ma:browse:"+url.QueryEscape(str(it, "path")), parent, "", "", kindFolder, maAccount)
 	}
 	k := kindLeaf
-	if mt == "album" || mt == "playlist" || mt == "artist" {
+	if mt == "album" || mt == "playlist" || mt == "artist" || mt == "podcast" {
 		k = kindContainer
 	}
 	return svItem(str(it, "name"), "ma:obj:"+url.QueryEscape(str(it, "uri")), parent, maSubtitle(it), m.imageURL(it), k, maAccount)
@@ -339,7 +359,7 @@ func (m *maClient) list(uri string, offset, limit int) ([]map[string]any, error)
 		}
 		mt, id, _ := strings.Cut(rest, "/")
 		cmd := map[string]string{"album": "music/albums/album_tracks", "playlist": "music/playlists/playlist_tracks",
-			"artist": "music/artists/artist_albums"}[mt]
+			"artist": "music/artists/artist_albums", "podcast": "music/podcasts/podcast_episodes"}[mt]
 		if cmd == "" {
 			return nil, nil
 		}

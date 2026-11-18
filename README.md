@@ -136,8 +136,9 @@ You need:
   end of the page URL (e.g. `…/settings/editplayer/up0123abcd` → `up0123abcd`). The installer
   rejects a value containing spaces.
 
-The Savant app then shows a "Music Assistant" tile. Playback goes over AirPlay 2 to the Savant
-audio server.
+The Savant app then shows a "Music Assistant" tile with Radios, Playlists, Albums, Artists,
+Tracks, Podcasts and a "Browse" entry for the providers. Playback goes over AirPlay 2 to the
+Savant audio server.
 
 ## Roon
 
