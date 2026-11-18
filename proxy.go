@@ -48,6 +48,7 @@ func svItem(title, uri, parent, subtitle, art string, k itemKind, account string
 // tileItem is a music home tile: its artworkKey changes with its image, so that the Savant app,
 // which caches images by artworkKey, shows a new tile image instead of the cached one.
 func tileItem(title, uri, art, account string) map[string]any {
+	art = logos.url(art)
 	e := svItem(title, uri, "root", "", art, kindFolder, account)
 	if art != "" {
 		h := fnv.New32a()

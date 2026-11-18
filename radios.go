@@ -177,7 +177,20 @@ func (rd *radios) list(offset, limit int) []map[string]any {
 		if limit > 0 && len(out) >= limit {
 			break
 		}
-		out = append(out, svItem(s.Name, radioPrefix+":station:"+s.Mount, radioPrefix+":root", "", s.Logo, kindLeaf, radioAccount))
+		out = append(out, svItem(s.Name, radioPrefix+":station:"+s.Mount, radioPrefix+":root", "", logos.url(s.Logo), kindLeaf, radioAccount))
+	}
+	return out
+}
+
+// logoURLs lists the station logos (for the local logo cache).
+func (rd *radios) logoURLs() []string {
+	rd.mu.RLock()
+	defer rd.mu.RUnlock()
+	var out []string
+	for _, s := range rd.stations {
+		if s.Logo != "" {
+			out = append(out, s.Logo)
+		}
 	}
 	return out
 }
@@ -209,7 +222,7 @@ func (rd *radios) playItem(uri string) (map[string]any, bool) {
 		return nil, false
 	}
 	cu := customURI(s)
-	it := svItem(s.Name, cu, "", "", s.Logo, kindLeaf, customAccount(s))
+	it := svItem(s.Name, cu, "", "", logos.url(s.Logo), kindLeaf, customAccount(s))
 	it["artworkKey"] = cu
 	return it, true
 }
@@ -383,7 +396,7 @@ func (rd *radios) display(s station) (title, subtitle, art string) {
 	}
 	art = m.Cover
 	if art == "" {
-		art = s.Logo
+		art = logos.url(s.Logo)
 	}
 	return
 }

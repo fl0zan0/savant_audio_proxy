@@ -97,6 +97,15 @@ then `sudo systemctl restart savant-audio-proxy`. `STATIONS` in `config.env` can
 http(s) URL: the list is then reloaded every 10 minutes. The tile name shown in Savant is
 `RADIOS_TITLE` (default "My Radios").
 
+### Logos
+
+Tile images (radios, Music Assistant, Roon) and station logos are downloaded once into
+`/data/RPM/savant-audio-proxy/logos/` and served by the Savant audio server itself
+(`http://<its IP>:14029/logos/...`), so the Savant app does not depend on the remote sites to
+show them. They are refreshed weekly; until a logo is downloaded, its original URL is used.
+`LOCAL_LOGOS="no"` in `config.env` turns this off, `LOGOS_PORT` changes the port. Now-playing
+cover art stays remote.
+
 ### Now playing
 
 `music-go` ignores the titles radios send inside their stream (ICY metadata): on its own it

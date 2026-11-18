@@ -41,6 +41,9 @@ func main() {
 	maAddr := flag.String("ma", "", "Music Assistant HOST:PORT; empty = disabled")
 	maTokenFile := flag.String("ma-token-file", "", "file holding an MA long-lived token")
 	maPlayer := flag.String("ma-player", "", "MA player_id of this unit's AirPlay player")
+	logosDir := flag.String("logos-dir", "", "keep tile images and station logos in this folder and serve them from this unit; empty = use the original URLs")
+	logosListen := flag.String("logos-listen", "0.0.0.0:14029", "HTTP address the local logos are served on")
+	logosHost := flag.String("logos-host", "", "host name or IP of this unit in the logo URLs (default: its LAN IP)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -53,6 +56,14 @@ func main() {
 		os.Exit(1)
 	}
 	p := &proxy{upstream: *upstream, conns: map[*hostConn]struct{}{}}
+	if *logosDir != "" {
+		lc, err := newLogoCache(*logosDir, *logosListen, *logosHost)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "logos:", err)
+			os.Exit(1)
+		}
+		logos = lc
+	}
 
 	if *stations != "" {
 		radioTitle = *title
@@ -64,12 +75,14 @@ func main() {
 		}
 		rd.onMeta = p.pushMeta
 		p.rd = rd
+		logos.prefetch(rd.logoURLs()...)
 		if strings.HasPrefix(*stations, "http") {
 			go func() {
 				for range time.Tick(10 * time.Minute) {
 					if err := rd.load(); err != nil {
 						logEvent("radios_reload_error", "err", err.Error())
 					}
+					logos.prefetch(rd.logoURLs()...)
 				}
 			}()
 		}
@@ -116,6 +129,16 @@ func main() {
 			}
 		}
 		p.roon = r
+	}
+
+	if p.rd != nil {
+		logos.prefetch(radioIcon)
+	}
+	if p.ma != nil {
+		logos.prefetch(maIconURL)
+	}
+	if p.roon != nil {
+		logos.prefetch(roonIconURL)
 	}
 
 	ln, err := net.Listen("tcp", *listen)
