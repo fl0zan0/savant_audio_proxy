@@ -236,7 +236,7 @@ MA_PLAYER=${MA_PLAYER:-}
 ROON_ADDR=${ROON_ADDR:-}
 ROON_ZONE=${ROON_ZONE:-}
 LOG_MAX_MB=${LOG_MAX_MB:-50}
-LOCAL_LOGOS=${LOCAL_LOGOS:-yes}
+LOCAL_LOGOS=${LOCAL_LOGOS:-no}
 LOGOS_PORT=${LOGOS_PORT:-14029}
 
 # --- command line ----------------------------------------------------------------------
@@ -294,8 +294,8 @@ else
     echo "   Roon disabled."
 fi
 
-if [ "$LOCAL_LOGOS" = no ]; then
-    echo "   logos: loaded by the Savant app from their original sites"
+if [ "$LOCAL_LOGOS" != yes ]; then
+    echo "   logos: loaded by the Savant app from their URLs"
 else
     case $LOGOS_PORT in ''|*[!0-9]*) fail "LOGOS_PORT must be a number." ;; esac
     ARGS="$ARGS --logos-dir $DEST_DIR/logos --logos-listen 0.0.0.0:$LOGOS_PORT"

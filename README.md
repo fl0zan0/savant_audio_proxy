@@ -99,12 +99,14 @@ http(s) URL: the list is then reloaded every 10 minutes. The tile name shown in 
 
 ### Logos
 
-Tile images (radios, Music Assistant, Roon) and station logos are downloaded once into
-`/data/RPM/savant-audio-proxy/logos/` and served by the Savant audio server itself
-(`http://<its IP>:14029/logos/...`), so the Savant app does not depend on the remote sites to
-show them. They are refreshed weekly; until a logo is downloaded, its original URL is used.
-`LOCAL_LOGOS="no"` in `config.env` turns this off, `LOGOS_PORT` changes the port. Now-playing
-cover art stays remote.
+The tile images (radios, Music Assistant, Roon) live in [`icons/`](icons) and are served by
+jsDelivr; `RADIOS_ICON`, `MA_ICON` and `ROON_ICON` in `config.env` replace them. Station logos
+come from the `tvg-logo` URLs of the M3U.
+
+For a site without Internet, `LOCAL_LOGOS="yes"` downloads all logos once into
+`/data/RPM/savant-audio-proxy/logos/` and serves them from the Savant audio server
+(`http://<its IP>:14029/logos/...`, port `LOGOS_PORT`). These URLs only work on the local
+network: the Savant app shows no logo when used remotely. Now-playing cover art stays remote.
 
 ### Now playing
 

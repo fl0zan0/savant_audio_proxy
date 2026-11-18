@@ -32,7 +32,7 @@ func main() {
 	coverURL := flag.String("cover-url", "", "optional metadata server base: GET <base>/<mount>.json and SSE <base>/<mount>/events; empty = station name and logo only")
 	icy := flag.Bool("icy", true, "without --cover-url, read now-playing titles from the stream's ICY metadata")
 	title := flag.String("radios-title", "My Radios", "name of the radios tile shown in Savant")
-	radiosIcon := flag.String("radios-icon", "", "image URL for the radios tile (default: first station logo)")
+	radiosIcon := flag.String("radios-icon", defaultRadioIcon, "image URL for the radios tile (\"none\" = logo of the first station)")
 	maIcon := flag.String("ma-icon", defaultMAIcon, "image URL for the \"Music Assistant\" tile (\"none\" = no image)")
 	roonAddr := flag.String("roon", "", "Roon Server host[:port] (default port 9330); empty = Roon disabled")
 	roonToken := flag.String("roon-token-file", "", "file keeping the Roon extension token (written by the proxy)")
@@ -41,7 +41,7 @@ func main() {
 	maAddr := flag.String("ma", "", "Music Assistant HOST:PORT; empty = disabled")
 	maTokenFile := flag.String("ma-token-file", "", "file holding an MA long-lived token")
 	maPlayer := flag.String("ma-player", "", "MA player_id of this unit's AirPlay player")
-	logosDir := flag.String("logos-dir", "", "keep tile images and station logos in this folder and serve them from this unit; empty = use the original URLs")
+	logosDir := flag.String("logos-dir", "", "keep tile images and station logos in this folder and serve them from this unit (LAN only); empty = use the original URLs")
 	logosListen := flag.String("logos-listen", "0.0.0.0:14029", "HTTP address the local logos are served on")
 	logosHost := flag.String("logos-host", "", "host name or IP of this unit in the logo URLs (default: its LAN IP)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
@@ -67,7 +67,7 @@ func main() {
 
 	if *stations != "" {
 		radioTitle = *title
-		radioIcon = *radiosIcon
+		radioIcon = iconURL(*radiosIcon)
 		rd := &radios{source: *stations, coverURL: strings.TrimRight(*coverURL, "/"), icy: *icy}
 		if err := rd.load(); err != nil {
 			fmt.Fprintln(os.Stderr, "stations:", err)
@@ -159,10 +159,12 @@ func main() {
 	}
 }
 
-// Tile logos (dashboardicons.com, homarr-labs/dashboard-icons), used unless replaced.
+// Tile logos, kept in this repository (icons/) and served by jsDelivr, used unless replaced.
 const (
-	defaultMAIcon   = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/music-assistant.png"
-	defaultRoonIcon = "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/roon.png"
+	iconsBase        = "https://cdn.jsdelivr.net/gh/fl0zan0/savant_audio_proxy@main/icons/"
+	defaultRadioIcon = iconsBase + "radio.png"
+	defaultMAIcon    = iconsBase + "music-assistant.png"
+	defaultRoonIcon  = iconsBase + "roon.png"
 )
 
 // iconURL maps the "none" setting to no image.
