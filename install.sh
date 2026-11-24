@@ -45,6 +45,13 @@ OLD_DIR=/data/RPM/savant-radios          # settings imported when there is no co
 PORT=14028
 TAB=$(printf '\t')
 
+# Settings given in the environment win over config.env, which is sourced further down.
+ENV_MA_ADDR=${MA_ADDR:-}
+ENV_MA_PLAYER=${MA_PLAYER:-}
+ENV_MA_TOKEN=${MA_TOKEN:-}
+ENV_ROON_ADDR=${ROON_ADDR:-}
+ENV_ROON_ZONE=${ROON_ZONE:-}
+
 say()  { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 
@@ -167,7 +174,7 @@ set_conf() {
 }
 # ask QUESTION DEFAULT: reads the answer from the terminal (works with "wget | sh" too)
 ask() {
-    [ -r /dev/tty ] || fail "no terminal to answer \"$1\": use the MA_ADDR, MA_PLAYER, MA_TOKEN variables."
+    ( : < /dev/tty ) 2>/dev/null || fail "no terminal to answer \"$1\": use the MA_ADDR, MA_PLAYER, MA_TOKEN variables."
     if [ -n "$2" ]; then printf '%s [%s]: ' "$1" "$2" > /dev/tty; else printf '%s: ' "$1" > /dev/tty; fi
     read -r rep < /dev/tty || rep=""
     [ -n "$rep" ] && echo "$rep" || echo "$2"
@@ -190,14 +197,15 @@ Settings > Players > this Savant audio server's AirPlay player; the id ends the 
 . "$CONF"
 if [ "$WITH_MA" = yes ]; then
     say "Music Assistant"
-    MA_ADDR=${MA_ADDR:-}; MA_PLAYER=${MA_PLAYER:-}
+    # environment first, then the values already in config.env, then ask
+    MA_ADDR=${ENV_MA_ADDR:-${MA_ADDR:-}}; MA_PLAYER=${ENV_MA_PLAYER:-${MA_PLAYER:-}}
     [ -n "$MA_ADDR" ] || MA_ADDR=$(ask "Music Assistant address (e.g. 192.168.1.10:8095)" "")
     [ -n "$MA_PLAYER" ] || MA_PLAYER=$(ask "player_id (not the name) of this Savant audio server's AirPlay player in MA, e.g. up0123abcd" "")
     [ -n "$MA_ADDR" ] && [ -n "$MA_PLAYER" ] || fail "Music Assistant address and player are required."
     no_space MA_ADDR "$MA_ADDR"
     no_space MA_PLAYER "$MA_PLAYER" "$PLAYER_HINT"
-    if [ -n "${MA_TOKEN:-}" ]; then
-        printf '%s\n' "$MA_TOKEN" > "$DEST_DIR/ma_token"
+    if [ -n "$ENV_MA_TOKEN" ]; then
+        printf '%s\n' "$ENV_MA_TOKEN" > "$DEST_DIR/ma_token"
     elif [ ! -s "$DEST_DIR/ma_token" ]; then
         tok=$(ask "Music Assistant long-lived token" "")
         [ -n "$tok" ] || fail "a Music Assistant token is required."
@@ -214,7 +222,7 @@ fi
 
 if [ "$WITH_ROON" = yes ]; then
     say "Roon"
-    ROON_ADDR=${ROON_ADDR:-}; ROON_ZONE=${ROON_ZONE:-}
+    ROON_ADDR=$ENV_ROON_ADDR; ROON_ZONE=$ENV_ROON_ZONE
     [ -n "$ROON_ADDR" ] || ROON_ADDR=$(ask "Roon Server address (e.g. 192.168.1.20, port 9330 by default)" "")
     [ -n "$ROON_ZONE" ] || ROON_ZONE=$(ask "name of this Savant audio server's AirPlay zone in Roon (Settings > Audio)" "")
     [ -n "$ROON_ADDR" ] && [ -n "$ROON_ZONE" ] || fail "Roon Server address and zone are required."
